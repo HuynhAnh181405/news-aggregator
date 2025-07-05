@@ -1,0 +1,68 @@
+# news-aggregator/docker-compose.yml
+version: '3.8'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.3
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.3
+    hostname: kafka
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true" # Auto-create topics for simplicity
+
+  scraper:
+    build:
+      context: ./services/scraper
+      dockerfile: Dockerfile
+    container_name: scraper-service
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_BROKER: kafka:29092 # Use internal Docker network name for Kafka
+      KAFKA_TOPIC: news-updates
+    logging:
+      # Optional: configure logging driver
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  api:
+    build:
+      context: ./services/api
+      dockerfile: Dockerfile
+    container_name: api-service
+    depends_on:
+      - kafka
+    ports:
+      - "8080:8080" # Map host port 8080 to container port 8080
+    environment:
+      KAFKA_BROKER: kafka:29092 # Use internal Docker network name for Kafka
+      KAFKA_TOPIC: news-updates
+      KAFKA_GROUP_ID: news-aggregator-group
+      API_PORT: 8080
+    logging:
+      # Optional: configure logging driver
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"

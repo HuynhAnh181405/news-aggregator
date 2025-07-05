@@ -1,0 +1,68 @@
+# news-aggregator/.github/workflows/deploy.yml
+name: Deploy to Google Cloud Run
+
+on:
+  push:
+    branches:
+      - main # Trigger on push to main branch
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGION: ${{ secrets.GCP_REGION }}
+  KAFKA_BROKER_EXT: your-public-kafka-broker-ip:9092 # <-- BẠN CẦN THAY THẾ CHỖ NÀY
+  KAFKA_TOPIC: news-updates
+  API_PORT: 8080
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write' # Required for Workload Identity Federation
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Cloud SDK (gcloud)
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          service_account_key_file: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Authenticate Docker to Google Container Registry (GCR) or Artifact Registry
+        run: gcloud auth configure-docker
+
+      - name: Build and push Scraper Docker image
+        run: |
+          docker build -t gcr.io/${{ env.PROJECT_ID }}/news-scraper:${{ github.sha }} ./services/scraper
+          docker push gcr.io/${{ env.PROJECT_ID }}/news-scraper:${{ github.sha }}
+
+      - name: Build and push API Docker image
+        run: |
+          docker build -t gcr.io/${{ env.PROJECT_ID }}/news-api:${{ github.sha }} ./services/api
+          docker push gcr.io/${{ env.PROJECT_ID }}/news-api:${{ github.sha }}
+
+      - name: Deploy Scraper service to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: news-scraper-service
+          image: gcr.io/${{ env.PROJECT_ID }}/news-scraper:${{ github.sha }}
+          region: ${{ env.REGION }}
+          env_vars: |
+            KAFKA_BROKER=${{ env.KAFKA_BROKER_EXT }}
+            KAFKA_TOPIC=${{ env.KAFKA_TOPIC }}
+          no_allow_unauthenticated: true # Scrapers typically don't need public access
+
+      - name: Deploy API service to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: news-api-service
+          image: gcr.io/${{ env.PROJECT_ID }}/news-api:${{ github.sha }}
+          region: ${{ env.REGION }}
+          env_vars: |
+            KAFKA_BROKER=${{ env.KAFKA_BROKER_EXT }}
+            KAFKA_TOPIC=${{ env.KAFKA_TOPIC }}
+            KAFKA_GROUP_ID=news-aggregator-group
+            API_PORT=${{ env.API_PORT }}
+          allow_unauthenticated: true # API needs public access
